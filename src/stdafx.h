@@ -21,8 +21,13 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
+#include <deque>
 #include <map>
 #include <memory>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
 
 // Node JS headers
 #include <v8.h>

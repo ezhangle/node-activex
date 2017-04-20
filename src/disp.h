@@ -30,6 +30,77 @@ public:
 	typedef std::map<DISPID, func_ptr> func_by_dispid_t;
 	func_by_dispid_t funcs_by_dispid;
 
+    class job_t {
+    public:
+        std::shared_ptr<DispInfo> disp;
+        std::vector<CComVariant> args;
+        CComVariant result;
+        LONG dispid, flags;
+        HRESULT hrcode;
+
+        typedef void process(const job_t &job);
+        typedef std::function<process> process_ptr;
+        process_ptr on_result;
+
+        void execute() {
+            UINT argcnt = args.size();
+            VARIANT *argptr = (argcnt > 0) ? (VARIANT*)&args[0] : nullptr;
+            hrcode = DispInvoke((IDispatch*)disp->ptr, (DISPID)dispid, argcnt, argptr, (VARIANT*)&result, (WORD)flags);
+            if (on_result) on_result(*this);
+        }
+    };
+    typedef std::shared_ptr<job_t> job_ptr;
+
+    class job_processor_t {
+    public:
+
+        void start() {
+            if (thread) stop();
+            terminated = false;
+            thread.reset(new std::thread(&job_processor_t::process, this));
+        }
+
+        void stop() {
+            if (!thread) return;
+            terminated = true;
+            thread->join();
+            thread.reset();
+        }
+
+        void push(const job_ptr &job) { 
+            if (!thread || terminated) {
+                job->execute();
+            }
+            else {
+                lock_t lck(safe);
+                queue.push_back(job);
+                condvar.notify_one();
+            }
+        }
+    protected:
+        typedef std::unique_lock<std::mutex> lock_t;
+        typedef std::deque<job_ptr> queue_t;
+        std::unique_ptr<std::thread> thread;
+        std::condition_variable condvar;
+        std::atomic<bool> terminated;
+        std::mutex safe;
+        queue_t queue;
+
+        void process() { 
+            std::mutex mtx;
+            lock_t lck(mtx);
+            while (terminated) {
+                condvar.wait(lck);
+                while (!queue.empty()) {
+                    job_ptr job = queue.front();
+                    queue.pop_front();
+                    job->execute();
+                }
+            }
+        }
+    };
+    typedef std::shared_ptr<job_processor_t> job_processor_ptr;
+
     inline DispInfo(IDispatch *disp, const std::wstring &nm, int opt, std::shared_ptr<DispInfo> *parnt = nullptr)
         : ptr(disp), options(opt), name(nm)
     { 
@@ -124,7 +195,6 @@ public:
 };
 
 typedef std::shared_ptr<DispInfo> DispInfoPtr;
-
 
 class DispObject: public ObjectWrap
 {
